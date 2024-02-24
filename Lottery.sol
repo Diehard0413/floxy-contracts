@@ -1,244 +1,146 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-abstract contract VRFConsumerBaseV2 {
-    error OnlyCoordinatorCanFulfill (address have, address want);
-    address private immutable vrfCoordinator;
-
-    constructor(address _vrfCoordinator) {
-        vrfCoordinator = _vrfCoordinator;
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
     }
 
-    function fulfillRandomWords(uint256 requestId, uint256[] memory randomWords) internal virtual;
-
-    function rawFulfillRandomWords(uint256 requestId, uint256[] memory randomWords) external {
-        if (msg.sender != vrfCoordinator) {
-            revert OnlyCoordinatorCanFulfill(msg.sender, vrfCoordinator);
-        }
-        fulfillRandomWords(requestId, randomWords);
+    function _msgData() internal view virtual returns (bytes calldata) {
+        return msg.data;
     }
 }
 
-interface IOwnable {
-    function owner() external returns (address);
+abstract contract Ownable is Context {
+    address private _owner;
 
-    function transferOwnership(address recipient) external;
+    error OwnableUnauthorizedAccount(address account);
 
-    function acceptOwnership() external;
-}
+    error OwnableInvalidOwner(address owner);
 
-contract ConfirmedOwnerWithProposal is IOwnable {
-    address private s_owner;
-    address private s_pendingOwner;
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
-    event OwnershipTransferRequested(address indexed from, address indexed to);
-    event OwnershipTransferred(address indexed from, address indexed to);
-
-    constructor(address newOwner, address pendingOwner) {
-        require(newOwner != address(0), "Cannot set owner to zero");
-
-        s_owner = newOwner;
-        if (pendingOwner != address(0)) {
-            _transferOwnership(pendingOwner);
+    constructor(address initialOwner) {
+        if (initialOwner == address(0)) {
+            revert OwnableInvalidOwner(address(0));
         }
-    }
-
-    function transferOwnership(address to) public override onlyOwner {
-        _transferOwnership(to);
-    }
-
-    function acceptOwnership() external override {
-        require(msg.sender == s_pendingOwner, "Must be proposed owner");
-
-        address oldOwner = s_owner;
-        s_owner = msg.sender;
-        s_pendingOwner = address(0);
-
-        emit OwnershipTransferred(oldOwner, msg.sender);
-    }
-
-    function owner() public view override returns (address) {
-        return s_owner;
-    }
-
-    function _transferOwnership(address to) private {
-        require(to != msg.sender, "Cannot transfer to self");
-
-        s_pendingOwner = to;
-
-        emit OwnershipTransferRequested(s_owner, to);
-    }
-
-    function _validateOwnership() internal view {
-        require(msg.sender == s_owner, "Only callable by owner");
+        _transferOwnership(initialOwner);
     }
 
     modifier onlyOwner() {
-        _validateOwnership();
+        _checkOwner();
         _;
     }
-}
 
-contract ConfirmedOwner is ConfirmedOwnerWithProposal {
-    constructor(address newOwner) ConfirmedOwnerWithProposal(newOwner, address(0)) {}
-}
-
-interface VRFCoordinatorV2Interface {
-    function getRequestConfig() external view returns (uint16, uint32, bytes32[] memory);
-
-    function requestRandomWords(
-        bytes32 keyHash,
-        uint64 subId,
-        uint16 minimumRequestConfirmations,
-        uint32 callbackGasLimit,
-        uint32 numWords
-    ) external returns (uint256 requestId);
-
-    function createSubscription() external returns (uint64 subId);
-
-    function getSubscription(
-        uint64 subId
-    ) external view returns (uint96 balance, uint64 reqCount, address owner, address[] memory consumers);
-
-    function requestSubscriptionOwnerTransfer(uint64 subId, address newOwner) external;
-
-    function acceptSubscriptionOwnerTransfer(uint64 subId) external;
-
-    function addConsumer(uint64 subId, address consumer) external;
-
-    function removeConsumer(uint64 subId, address consumer) external;
-
-    function cancelSubscription(uint64 subId, address to) external;
-
-    function pendingRequestExists(uint64 subId) external view returns (bool);
-}
-
-contract Lottery is VRFConsumerBaseV2, ConfirmedOwner {
-    event RequestSent(uint256 requestId, uint32 numWords);
-    event RequestFulfilled(uint256 requestId, uint256[] randomWords);
-    event ParticipantAdded(uint256 index, address participant);
-    event TicketAssigned(address participant,uint256 ticketNumber);
-
-    struct RequestStatus {
-        bool fulfilled;
-        bool exists;
-        uint256[] randomWords;
+    function owner() public view virtual returns (address) {
+        return _owner;
     }
 
-    mapping(uint256 => RequestStatus) public s_requests;
-    VRFCoordinatorV2Interface COORDINATOR;
-
-    mapping(address => uint256) public participantTicket;
-
-    uint64 s_subscriptionId;
-
-    uint256 public lotteryCount = 0;
-
-
-    address[] public participants;
-    uint256[] public tickets;
-
-    uint256[] public requestIds;
-    uint256 public lastRequestId;
-
-    bytes32 keyHash =
-        0x8af398995b04c28e9951adb9721ef74c74f93e6a478f39e7e0777be13527e7ef;
-
-    uint32 callbackGasLimit = 100000;
-    uint16 requestConfirmations = 3;
-    uint32 numWords = 2;
-
-    constructor(
-        uint64 subscriptionId
-    )
-        VRFConsumerBaseV2(0xa842a38CD758f8dE8537C5CBcB2006DB0250eC7C)
-        ConfirmedOwner(msg.sender)
-    {
-        COORDINATOR = VRFCoordinatorV2Interface(
-            0xa842a38CD758f8dE8537C5CBcB2006DB0250eC7C
-        );
-        s_subscriptionId = subscriptionId;
-    }
-
-    function requestRandomWords()
-        external
-        onlyOwner
-        returns (uint256 requestId)
-    {
-        requestId = COORDINATOR.requestRandomWords(
-            keyHash,
-            s_subscriptionId,
-            requestConfirmations,
-            callbackGasLimit,
-            numWords
-        );
-        s_requests[requestId] = RequestStatus({
-            randomWords: new uint256[](0),
-            exists: true,
-            fulfilled: false
-        });
-        requestIds.push(requestId);
-        lastRequestId = requestId;
-        emit RequestSent(requestId, numWords);
-        return requestId;
-    }
-
-    function fulfillRandomWords(
-        uint256 _requestId,
-        uint256[] memory _randomWords
-    ) internal override {
-        require(s_requests[_requestId].exists, "request not found");
-        s_requests[_requestId].fulfilled = true;
-        s_requests[_requestId].randomWords = _randomWords;
-        emit RequestFulfilled(_requestId, _randomWords);
-    }
-
-    function getRequestStatus(
-        uint256 _requestId
-    ) external view returns (bool fulfilled, uint256[] memory randomWords) {
-        require(s_requests[_requestId].exists, "request not found");
-        RequestStatus memory request = s_requests[_requestId];
-        return (request.fulfilled, request.randomWords);
-    }
-
-
-    function populateParticipants(address[] memory _participants) external {
-        require(_participants.length > 0,"Invalid Input");
-
-        for(uint256 i = 0; i < _participants.length; i++) {
-            require(_participants[i] != address(0), "Invalid Address");
-            participants.push(_participants[i]);
-            tickets.push(lotteryCount);
-            lotteryCount++;
-            emit ParticipantAdded(i,_participants[i]);
+    function _checkOwner() internal view virtual {
+        if (owner() != _msgSender()) {
+            revert OwnableUnauthorizedAccount(_msgSender());
         }
     }
 
+    function renounceOwnership() public virtual onlyOwner {
+        _transferOwnership(address(0));
+    }
 
-    function generateWinnerUsingRandom(uint256 _requestId, uint256 startPoint) external {
-        require(s_requests[_requestId].fulfilled, "Request Not Fulfied");
-        uint256 randomNum = s_requests[_requestId].randomWords[0];        
-            
-        uint256 limit = 0;
-        if (startPoint + 500 < participants.length) {
-            limit = startPoint + 500;
-        } else {
-            limit = participants.length;
+    function transferOwnership(address newOwner) public virtual onlyOwner {
+        if (newOwner == address(0)) {
+            revert OwnableInvalidOwner(address(0));
         }
-        for (uint256 j = startPoint; j < limit; j++) {
+        _transferOwnership(newOwner);
+    }
 
-            uint256 randomTicket = uint160(participants[j]) % randomNum;
-            uint256 index = randomTicket%tickets.length;
-            uint256 assignedTicket = tickets[index];
-            participantTicket[participants[j]] = assignedTicket;
+    function _transferOwnership(address newOwner) internal virtual {
+        address oldOwner = _owner;
+        _owner = newOwner;
+        emit OwnershipTransferred(oldOwner, newOwner);
+    }
+}
 
-            if (index != tickets.length - 1) {
-                tickets[index] = tickets[tickets.length - 1];
+contract Lottery is Ownable {
+    struct Project {
+        uint256 totalParticipants;
+        uint256 totalWinners;
+        address[] participants;
+        address[] winners;
+        bool isActivated;
+    }
+
+    uint256 private nonce = 0;
+    mapping(uint256 => Project) private projects;
+    mapping(uint256 => mapping(address => bool)) private participated;
+    mapping(uint256 => mapping(uint256 => bool)) private selected;
+
+    event ProjectCreated(uint256 projectId, uint256 totalParticipants, uint256 totalWinners);
+    event ParticipantAdded(uint256 projectId, address[] participants);
+    event WinnersSelected(uint256 projectId, address[] winners);
+
+    constructor() Ownable(msg.sender) {}
+
+    // Function to create a new project
+    function createProject(uint256 projectId, uint256 totalParticipants, uint256 totalWinners) external onlyOwner {
+        require(!projects[projectId].isActivated, "Project already exists");
+
+        projects[projectId].totalParticipants = totalParticipants;
+        projects[projectId].totalWinners = totalWinners;
+        projects[projectId].isActivated = true;
+        emit ProjectCreated(projectId, totalParticipants, totalWinners);
+    }
+
+    // Function to add a participant to a project
+    function joinProject(uint256 projectId) external {
+        require(projects[projectId].isActivated, "Project does not exist");
+        require(projects[projectId].participants.length < projects[projectId].totalParticipants, "Project is filled");
+        require(!participated[projectId][msg.sender], "Already participated");
+
+        projects[projectId].participants.push(msg.sender);
+        participated[projectId][msg.sender] = true;
+        emit ParticipantAdded(projectId, projects[projectId].participants);
+    }
+
+    // Function to choose winners for a project
+    function chooseWinners(uint256 projectId) external onlyOwner {
+        require(projects[projectId].isActivated, "Project does not exist");
+        require(projects[projectId].participants.length >= projects[projectId].totalWinners, "Not enough participants");
+
+        uint256 winnersCount = 0;
+
+        while (winnersCount < projects[projectId].totalWinners) {
+            uint256 randomIndex = getRandomNumber(nonce, projects[projectId].participants.length);
+            nonce++;
+
+            if (!selected[projectId][randomIndex]) {
+                selected[projectId][randomIndex] = true;
+                projects[projectId].winners.push(projects[projectId].participants[randomIndex]);
+                winnersCount++;
             }
-            tickets.pop();
-            // winnerList.push(Winners(participants[lotteryCount],tickets[ticketIndex]));
-            emit TicketAssigned(participants[j],randomTicket);
-            
         }
+
+        projects[projectId].isActivated = false;
+        emit WinnersSelected(projectId, projects[projectId].winners);
+    }
+
+    function getRandomNumber(uint256 seed, uint256 length) public view returns (uint256) {
+        return uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender, seed))) % length;
+    }
+
+    function getProject(uint256 projectId) external view returns (
+        uint256 totalParticipants,
+        uint256 totalWinners,
+        address[] memory participants,
+        address[] memory winners,
+        bool isActivated
+    ) {
+        Project memory project = projects[projectId];
+        return (
+            project.totalParticipants,
+            project.totalWinners,
+            project.participants,
+            project.winners,
+            project.isActivated
+        );
     }
 }
