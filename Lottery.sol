@@ -109,7 +109,7 @@ contract Lottery is Ownable {
         uint256 winnersCount = 0;
 
         while (winnersCount < projects[projectId].totalWinners) {
-            uint256 randomIndex = getRandomNumber(nonce, projects[projectId].participants.length);
+            uint256 randomIndex = uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender, nonce))) % projects[projectId].participants.length;
             nonce++;
 
             if (!selected[projectId][randomIndex]) {
@@ -121,10 +121,6 @@ contract Lottery is Ownable {
 
         projects[projectId].isActivated = false;
         emit WinnersSelected(projectId, projects[projectId].winners);
-    }
-
-    function getRandomNumber(uint256 seed, uint256 length) public view returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender, seed))) % length;
     }
 
     function getProject(uint256 projectId) external view returns (
